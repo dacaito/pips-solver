@@ -62,13 +62,15 @@ Requires `terser` (`npm install -g terser`). Falls back to unminified if terser 
 
 ### Improve the placer (automated DOM placement)
 
-Edit `tryAutoPlace()` in `src/placer.js`. The function should:
-1. Find domino elements in the tray (identify by counting pip dots)
-2. Find target grid cells (identify by position)
-3. Simulate drag-and-drop events
-4. Return `true` if placement succeeded
+`tryAutoPlace()` in `src/placer.js` has a working implementation that:
+1. Finds dominos via React props (`firstDots`/`secondDots`) or by counting SVG circles
+2. Finds droppable cells by class name pattern and maps them to puzzle coordinates by position
+3. Simulates pointer drag events (`pointerdown` -> `pointermove` -> `pointerup`)
 
-The current implementation returns `false` (falls back to overlay).
+The overlay always shows as backup. To improve auto-placement:
+- If the game changes its event model, update `simulateDrag()`
+- If the cell identification breaks, check the class name pattern in `findBoardCells()`
+- If domino identification breaks, check the React props key discovery in `findDominoButtons()`
 
 ### Change the overlay appearance
 

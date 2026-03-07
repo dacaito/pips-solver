@@ -147,19 +147,17 @@ Renders a grid overlay on top of the page showing:
 - Color-coded domino groupings (each domino gets a distinct background color)
 - Borders between different dominoes
 
-### Automated DOM Placement (future, `tryAutoPlace`)
+### Automated DOM Placement (`tryAutoPlace`)
 
-The NYT Pips UI uses:
-- **React** with CSS Modules (hashed class names like `Domino-module_halfDomino__FWnOS`)
-- **Drag-and-drop** to place dominoes from tray to board
-- **Click/tap** to rotate dominoes
+The NYT Pips UI uses React with CSS Modules (hashed class names) and pointer events for drag-and-drop. The auto-placer attempts:
 
-Automated placement would need to:
-1. Identify domino elements in the tray by counting pip dots (SVG circles)
-2. Identify grid cells by position/data attributes
-3. Dispatch `dragstart`/`dragover`/`drop` events or manipulate React fiber state
+1. **Find dominos** — scans `button` elements for React props (`firstDots`, `secondDots`) via the dynamically-discovered `__reactProps$` key. Falls back to counting SVG `circle` elements in each domino half.
+2. **Find board cells** — scans for `div` elements with "droppable" in the class name (e.g., `Board-module_droppableCell__ndah2`). Excludes hidden cells.
+3. **Map cells to coordinates** — sorts DOM cells by visual position (top-to-bottom, left-to-right) and maps them 1:1 to the sorted puzzle cell coordinates.
+4. **Match dominos to placements** — for each solution placement, finds the tray domino with matching pip counts (checking both orientations).
+5. **Simulate pointer drag** — dispatches `pointerdown` on the domino, a sequence of `pointermove` events along the path, and `pointerup` on the target cell.
 
-This is fragile because class names change on each NYT deployment. A more robust approach would be to access React's internal state via `__REACT_FIBER__` keys on DOM elements.
+This is a best-effort approach. The overlay always shows regardless of whether auto-placement succeeds, so the user always sees the answer.
 
 ## Known Limitations
 
