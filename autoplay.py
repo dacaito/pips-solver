@@ -228,15 +228,29 @@ def rotation_clicks(tray_lt, tray_rb, left_pip, right_pip, is_vertical):
         return 1 if lt_matches else 3
 
 
-def drag(page, sx, sy, dx, dy, steps=15):
+TRAY_HALF_COUNT_JS = """() => [...document.querySelectorAll('button')]
+    .filter(b => (b.className||'').includes('halfDomino')
+              && b.getBoundingClientRect().width > 10
+              && b.getBoundingClientRect().y > 600).length"""
+
+
+def drag(page, sx, sy, dx, dy, steps=10):
     page.mouse.move(sx, sy)
     page.mouse.down()
-    time.sleep(0.05)
+    time.sleep(0.03)
     for i in range(1, steps + 1):
         page.mouse.move(sx + (dx - sx) * i / steps, sy + (dy - sy) * i / steps)
-        time.sleep(0.02)
     page.mouse.up()
-    time.sleep(0.4)
+    time.sleep(0.1)
+
+
+def wait_drop(page, prev_half_count, timeout=1.5):
+    """Poll until tray half-count drops (domino was accepted by the board)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if page.evaluate(TRAY_HALF_COUNT_JS) < prev_half_count:
+            return
+        time.sleep(0.02)
 
 
 def place(page, regions, placements):
@@ -247,6 +261,7 @@ def place(page, regions, placements):
 
     for i, p in enumerate(placements):
         tray = find_tray_dominoes(page)
+        half_count = len(tray) * 2
 
         dst_a = cell_map.get(p.cell_a)
         dst_b = cell_map.get(p.cell_b)
@@ -280,9 +295,16 @@ def place(page, regions, placements):
         clicks = rotation_clicks(t["a"], t["b"], left_pip, right_pip, is_vertical)
         da, db = p.domino.a, p.domino.b
 
-        for ci in range(clicks):
-            page.mouse.click(t["ltx"], t["lty"])
-            time.sleep(0.35)
+        if clicks:
+            page.evaluate("""([x, y, n]) => {
+                function doClick(i) {
+                    const el = document.elementFromPoint(x, y);
+                    if (el) el.click();
+                    if (i + 1 < n) setTimeout(() => doClick(i + 1), 120);
+                }
+                doClick(0);
+            }""", [t["ltx"], t["lty"], clicks])
+            time.sleep(0.12 * clicks + 0.15)
             tray2 = find_tray_dominoes(page)
             matches = [t2 for t2 in tray2
                        if {t2["a"], t2["b"]} == {da, db}]
@@ -296,6 +318,7 @@ def place(page, regions, placements):
         print(f"  [{i+1}/{len(placements)}] {p.pip_a}|{p.pip_b} → "
               f"({p.cell_a.row},{p.cell_a.col}),({p.cell_b.row},{p.cell_b.col}) {tag}", flush=True)
         drag(page, grab_x, grab_y, drop_x, drop_y)
+        wait_drop(page, half_count)
     return True
 
 # ── Navigation ────────────────────────────────────────────────────
