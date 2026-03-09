@@ -141,55 +141,48 @@ def solve(dominoes, regions):
 # ── Place ─────────────────────────────────────────────────────────
 
 def find_tray_dominoes(page):
-    """Pair half-domino buttons into complete dominoes with pip counts and positions.
-
-    Only considers halves in the tray area (y > 600). Handles both horizontal
-    and vertical orientations (after rotation clicks). Returns left/top half
-    position for reliable grab targeting.
+    """Detect complete dominoes in the tray by grouping halves via their shared
+    parent DOM element. Returns left/top half position for grab targeting.
     """
-    halves = page.evaluate("""() => {
-        return [...document.querySelectorAll('button')]
+    return page.evaluate("""() => {
+        const halves = [...document.querySelectorAll('button')]
             .filter(b => (b.className||'').includes('halfDomino'))
-            .filter(b => { const r = b.getBoundingClientRect(); return r.width > 10 && r.y > 600; })
-            .map(b => {
-                let dots = null;
-                const fk = Object.keys(b).find(k => k.startsWith('__reactFiber'));
-                if (fk) {
-                    let f = b[fk];
-                    for (let i = 0; i < 10 && f; i++, f = f.return)
-                        if (f.memoizedProps?.numDots != null) { dots = f.memoizedProps.numDots; break; }
-                }
-                if (dots == null) dots = b.querySelectorAll('[class*="dot"]').length;
-                const r = b.getBoundingClientRect();
-                return { dots, x: r.x + r.width/2, y: r.y + r.height/2,
-                         left: r.x, top: r.y, width: r.width, height: r.height };
-            });
+            .filter(b => { const r = b.getBoundingClientRect(); return r.width > 10 && r.y > 600; });
+
+        const groups = new Map();
+        for (const h of halves) {
+            const p = h.parentElement;
+            if (!groups.has(p)) groups.set(p, []);
+            groups.get(p).push(h);
+        }
+
+        function dots(b) {
+            const fk = Object.keys(b).find(k => k.startsWith('__reactFiber'));
+            if (fk) {
+                let f = b[fk];
+                for (let i = 0; i < 10 && f; i++, f = f.return)
+                    if (f.memoizedProps?.numDots != null) return f.memoizedProps.numDots;
+            }
+            return b.querySelectorAll('[class*="dot"]').length;
+        }
+
+        const out = [];
+        for (const [, pair] of groups) {
+            if (pair.length !== 2) continue;
+            const [h1, h2] = pair;
+            const r1 = h1.getBoundingClientRect(), r2 = h2.getBoundingClientRect();
+            const c1 = { d: dots(h1), x: r1.x+r1.width/2, y: r1.y+r1.height/2 };
+            const c2 = { d: dots(h2), x: r2.x+r2.width/2, y: r2.y+r2.height/2 };
+            const horiz = Math.abs(c1.y - c2.y) < Math.abs(c1.x - c2.x);
+            let lt, rb;
+            if (horiz) { [lt, rb] = c1.x < c2.x ? [c1, c2] : [c2, c1]; }
+            else        { [lt, rb] = c1.y < c2.y ? [c1, c2] : [c2, c1]; }
+            out.push({ a: lt.d, b: rb.d,
+                       x: (c1.x+c2.x)/2, y: (c1.y+c2.y)/2,
+                       ltx: lt.x, lty: lt.y });
+        }
+        return out;
     }""")
-    halves.sort(key=lambda h: (round(h["y"] / 10), h["x"]))
-    out, used = [], set()
-    for i, a in enumerate(halves):
-        if i in used:
-            continue
-        for j in range(i + 1, len(halves)):
-            if j in used:
-                continue
-            b = halves[j]
-            h_adj = abs(a["y"] - b["y"]) < 15 and abs(a["left"] + a["width"] - b["left"]) < 15
-            v_adj = abs(a["x"] - b["x"]) < 15 and abs(a["top"] + a["height"] - b["top"]) < 15
-            if h_adj or v_adj:
-                used.add(i)
-                used.add(j)
-                if h_adj:
-                    lt, rb = (a, b) if a["x"] < b["x"] else (b, a)
-                else:
-                    lt, rb = (a, b) if a["y"] < b["y"] else (b, a)
-                out.append({
-                    "a": lt["dots"], "b": rb["dots"],
-                    "x": (a["x"] + b["x"]) / 2, "y": (a["y"] + b["y"]) / 2,
-                    "ltx": lt["x"], "lty": lt["y"],
-                })
-                break
-    return out
 
 
 def find_board_cells(page, regions):
@@ -240,17 +233,19 @@ def drag(page, sx, sy, dx, dy, steps=10):
     time.sleep(0.03)
     for i in range(1, steps + 1):
         page.mouse.move(sx + (dx - sx) * i / steps, sy + (dy - sy) * i / steps)
+        time.sleep(0.02)
     page.mouse.up()
     time.sleep(0.1)
 
 
-def wait_drop(page, prev_half_count, timeout=1.5):
+def wait_drop(page, prev_half_count, timeout=1.0):
     """Poll until tray half-count drops (domino was accepted by the board)."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         if page.evaluate(TRAY_HALF_COUNT_JS) < prev_half_count:
-            return
+            return True
         time.sleep(0.02)
+    return False
 
 
 def place(page, regions, placements):
@@ -273,16 +268,14 @@ def place(page, regions, placements):
         dc = p.cell_b.col - p.cell_a.col
         is_vertical = (dc == 0)
 
-        # Anchor cell = leftmost (horizontal) or topmost (vertical)
         if is_vertical:
-            anchor = dst_a if dr > 0 else dst_b
             left_pip = p.pip_a if dr > 0 else p.pip_b
             right_pip = p.pip_b if dr > 0 else p.pip_a
         else:
-            anchor = dst_a if dc > 0 else dst_b
             left_pip = p.pip_a if dc > 0 else p.pip_b
             right_pip = p.pip_b if dc > 0 else p.pip_a
-        drop_x, drop_y = anchor
+        drop_x = (dst_a[0] + dst_b[0]) / 2
+        drop_y = (dst_a[1] + dst_b[1]) / 2
 
         ti = next((j for j, t in enumerate(tray) if
             (t["a"] == p.domino.a and t["b"] == p.domino.b) or
@@ -295,16 +288,9 @@ def place(page, regions, placements):
         clicks = rotation_clicks(t["a"], t["b"], left_pip, right_pip, is_vertical)
         da, db = p.domino.a, p.domino.b
 
-        if clicks:
-            page.evaluate("""([x, y, n]) => {
-                function doClick(i) {
-                    const el = document.elementFromPoint(x, y);
-                    if (el) el.click();
-                    if (i + 1 < n) setTimeout(() => doClick(i + 1), 120);
-                }
-                doClick(0);
-            }""", [t["ltx"], t["lty"], clicks])
-            time.sleep(0.12 * clicks + 0.15)
+        for ci in range(clicks):
+            page.mouse.click(t["ltx"], t["lty"])
+            time.sleep(0.25)
             tray2 = find_tray_dominoes(page)
             matches = [t2 for t2 in tray2
                        if {t2["a"], t2["b"]} == {da, db}]
@@ -316,9 +302,25 @@ def place(page, regions, placements):
 
         tag = f"rot={clicks}" if clicks else "h"
         print(f"  [{i+1}/{len(placements)}] {p.pip_a}|{p.pip_b} → "
-              f"({p.cell_a.row},{p.cell_a.col}),({p.cell_b.row},{p.cell_b.col}) {tag}", flush=True)
-        drag(page, grab_x, grab_y, drop_x, drop_y)
-        wait_drop(page, half_count)
+              f"({p.cell_a.row},{p.cell_a.col}),({p.cell_b.row},{p.cell_b.col}) {tag}",
+              end="", flush=True)
+
+        for attempt in range(3):
+            pre = page.evaluate(TRAY_HALF_COUNT_JS)
+            drag(page, grab_x, grab_y, drop_x, drop_y)
+            if wait_drop(page, pre):
+                break
+            # Re-detect position for retry
+            tray2 = find_tray_dominoes(page)
+            matches = [t2 for t2 in tray2
+                       if {t2["a"], t2["b"]} == {da, db}]
+            if not matches:
+                break
+            matches.sort(key=lambda t2: abs(t2["x"]-t["x"]) + abs(t2["y"]-t["y"]))
+            t = matches[0]
+            grab_x, grab_y = t["ltx"], t["lty"]
+            print(f" retry{attempt+1}", end="", flush=True)
+        print(flush=True)
     return True
 
 # ── Navigation ────────────────────────────────────────────────────
